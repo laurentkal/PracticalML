@@ -1,0 +1,214 @@
+---
+title: "Practical machine learning project - Human activity recognition"
+author: "Laurent Kalfon"
+date: "19 décembre 2015"
+output: html_document
+---
+
+##Executive summary
+In this project, we analyse the HAR dataset in order to predict the manner in which 6 participants performed barbell lifts correctly and incorrectly, as measured by their accelerometer devices. More info is available in this [link]( http://groupware.les.inf.puc-rio.br/har).   
+To do so, after some preprocessing, we fit a model using a classification tree, but its accuracy is quite poor. Thus, we fit another model using the random forest algorithm wich we apply to the validation test: this time, the accuracy of the model (measured by its out of sample error rate) proves to be very good, so we choose it to predict the 20 observations of the test set.
+
+---
+
+##Basic setup
+
+```{r setup, message=FALSE, warning=FALSE}
+
+library(caret)
+library(lubridate)
+library(rattle)
+
+```
+
+---
+
+##Loading an pre-processing the data
+
+###*Loading the data*
+
+We first need to download the training and testing datasets and read them into R.
+
+```{r load data, echo = TRUE, warning = FALSE, message = FALSE, cache = TRUE}
+
+#Download training data
+if (!file.exists("./pml-training.csv")) {
+        download.file(url = "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", 
+                      destfile = "./pml-training.csv")
+}
+
+#Download test data
+if (!file.exists("./pml-testing.csv")) {
+        download.file(url = "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv", 
+                      destfile = "./pml-testing.csv")
+}
+
+#Load the data
+trainData <- read.csv("./pml-training.csv", na.strings = c("NA", "", " "))
+testData <- read.csv("./pml-testing.csv", na.strings = c("NA", "", " "))
+
+```
+
+Let's have a look at the data:
+
+```{r brief summary, echo = TRUE, warning = FALSE, message = FALSE, cache = TRUE}
+
+dim(trainData)
+dim(testData)
+
+```
+
+The trainData set consists of `r dim(trainData)[1]` observations and the testData set of `r dim(testData)[1]` observations. There are `r dim(trainData)[2]` variables, including the 'Classe' variable that we wish to predict. In this paper, we will only use the trainData set to train and test the model. The selected model will then be applied to the 20 observations of the testData set for the submission part of the assignment.
+
+###*Cleaning the data*
+
+Now, we need to deal with the NA values in the trainData dataset.   
+
+- We can see that many columns in the test and train datasets contain NA values. In fact, we notice that those columns contain NAs for almost all observations and that the other columns contain no NAs at all. The code below helps to identify the NAs columns, but I hide the results for the sake of readability.
+
+```{r identifying NAs colums, echo = TRUE, warning = FALSE, message = FALSE, cache = TRUE, results="hide"}
+
+#identifying NAs colums
+colSums(is.na(trainData))
+colSums(is.na(testData))
+
+```
+
+Thus, we decide to remove all columns that have NA values.
+
+```{r removing NAs, echo = TRUE, warning = FALSE, message = FALSE, cache = TRUE}
+
+#Remove columns with NAs
+trainData <- trainData[, colSums(is.na(trainData)) == 0]
+testData <- testData[, colSums(is.na(testData)) == 0]
+
+```
+
+- We remove the 'user_name' and 'X' variables that we don't want to add as predictors.
+
+```{r removing variables, echo = TRUE, warning = FALSE, message = FALSE, cache = TRUE}
+
+#Remove both variables
+variables <- c("X", "user_name")
+trainData <- trainData[, !names(trainData) %in% variables]
+testData <- testData[, !names(testData) %in% variables]
+
+```
+
+- We also need to convert the 'cvtd_timestamp' variable to POSIXT format 
+
+```{r date format, echo = TRUE, warning = FALSE, message = FALSE, cache = TRUE}
+
+#Reformat date
+trainData$cvtd_timestamp <- dmy_hm(trainData$cvtd_timestamp)
+testData$cvtd_timestamp <- dmy_hm(testData$cvtd_timestamp)
+
+```
+
+---
+
+##Modeling
+
+###*Data slicing*
+
+First, we create a train set and a test set out of the trainData set, based on the Classe variable. 
+
+```{r data slicing, echo = TRUE, warning = FALSE, message = FALSE, cache = TRUE}
+
+set.seed(1234)
+inTrain <- createDataPartition(trainData$classe, p = 0.70, list = FALSE)
+training <- trainData[inTrain, ]
+testing <- trainData[-inTrain, ]
+
+```
+
+
+###*Classification tree*   
+
+To start with, I try a simple classification tree to predict 'classe' with all variables as predictors.
+
+```{r Classification tree, echo = TRUE, warning = FALSE, message = FALSE, cache = TRUE}
+
+#Fit the classification tree model
+modTree <- train(classe ~., method = "rpart", data = training)
+fancyRpartPlot(modTree$finalModel, sub = "Classification tree model")
+
+```
+
+Now, we estimate its accuracy:
+
+```{r CART accuracy, echo = TRUE, warning = FALSE, message = FALSE, cache = TRUE}
+
+#Predict testing set
+predTree <- predict(modTree, testing)
+
+#Estimate accuracy
+accuracyTree <- confusionMatrix(predTree, testing$classe)$overall[1]
+
+```
+
+The accuracy (`r round(accuracyTree, 2)`) is really poor, so we decide to fit a model with a random forest algortithm instead.   
+
+###*Random forest model*
+   
+   
+- **Model fitting** : We fit a model on the training set with the Random Forest algorithm. We use a **10 fold-cross validation** to predict the 'Classe' of the subject based on all the predictors. 
+
+```{r fit the model, echo = TRUE, warning = FALSE, message = FALSE, cache = TRUE}
+
+#Fit a random forest model
+fit <- train(classe ~. , 
+             method = "rf", 
+             data = training, 
+             trControl = trainControl(method = "CV", number =10))
+
+```
+   
+   
+- **Accuracy**: We apply our model to the "testing" set and get the confusion matrix in order to estimate the accuracy and out of sample error rate of the model.
+
+```{r predict and confusion matrix, echo = TRUE, warning = FALSE, message = FALSE, cache = TRUE}
+
+#Predict testing set
+pred <- predict(fit, testing)
+
+#Accuracy
+accuracy <- confusionMatrix(pred, testing$classe)$overall[1]
+accuracy
+
+```
+
+From our analysis, our model has an accuracy of `r round(accuracy, 3)` and thus an **out of sample error of only `r 1-round(accuracy, 3)`**. This proves to be an excellent model to predict classe. 
+
+---
+
+##Submission
+
+Here is the code I used to predict the 20 observations'classes of the test set.
+
+```{r submission code, message = FALSE, warning = FALSE}
+
+#Predict testData Classe
+submission <- predict(fit, testData)
+
+#Write files (using the code provided on the project instruction page)
+pml_write_files = function(x){
+        n = length(x)
+        for(i in 1:n){
+                filename = paste0("problem_id_",i,".txt")
+                write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+        }
+}
+pml_write_files(submission)
+
+```
+
+---
+
+***Session Info***
+This is the session information for reproducibility purpose.
+
+```{r system info}
+
+sessionInfo()
+```
